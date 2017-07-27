@@ -1,4 +1,4 @@
-package main
+package spdx
 
 import (
 	"bufio"
@@ -14,7 +14,7 @@ func spdxSplit(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	// skip WS
 	start := 0
 	for ; start < len(data); start++ {
-		if data[start] != ' ' {
+		if data[start] != ' ' && data[start] != '\n' {
 			break
 		}
 	}
@@ -42,7 +42,6 @@ func spdxSplit(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	if atEOF && len(data) > start {
 		return len(data), data[start:], nil
 	}
-	println("end", start)
 	return start, nil, nil
 }
 
