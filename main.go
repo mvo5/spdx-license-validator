@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"os"
 )
@@ -23,55 +23,91 @@ const (
 
 type licenseID string
 
-type compoundExpr struct {
-	simple     licenseID
-	compound   []licenseID
-	cmmpoundOP int
+func NewLicenseID(s string) licenseID {
+	// FIXME: validate
+	return licenseID(s)
 }
 
-func spdxSplit(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	//fmt.Printf("%v %q %q %v\n", len(data), string(data), string(data[0]), atEOF)
-	// skip WS
-	start := 0
-	for ; start < len(data); start++ {
-		if data[start] != ' ' {
-			break
+type compoundExpr struct {
+	compound   []*compoundExpr
+	compoundOP Token
+
+	simple []licenseID
+}
+
+type Parser struct {
+	s *Scanner
+}
+
+func NewParser(r io.Reader) *Parser {
+	return &Parser{s: NewScanner(r)}
+}
+
+func (p *Parser) Parse() (*compoundExpr, error) {
+	root := &compoundExpr{}
+	cur, err := p.parse(root)
+	if cur != root {
+		return nil, fmt.Errorf("unbalanced parantheis")
+	}
+	return cur, err
+}
+
+func (p *Parser) parse(cur *compoundExpr) (*compoundExpr, error) {
+	for p.s.Scan() {
+		tok := p.s.Text()
+		switch tok {
+		case "(":
+			new := &compoundExpr{}
+			_, err := p.parse(new)
+			if err != nil {
+				return cur, err
+			}
+			cur.compound = append(cur.compound, new)
+		case ")":
+			return cur, nil
+		case "AND", "and":
+			if cur.compoundOP != ILLEGAL && cur.compoundOP != AND {
+				return nil, fmt.Errorf("cannot chnage op of %v", cur)
+			}
+			cur.compoundOP = AND
+		case "OR", "or":
+			if cur.compoundOP != ILLEGAL && cur.compoundOP != OR {
+				return nil, fmt.Errorf("cannot chnage op of %v", cur)
+			}
+			cur.compoundOP = OR
+		default:
+			cur.simple = append(cur.simple, NewLicenseID(tok))
 		}
 	}
-	if start == len(data) {
-		return start, nil, nil
+	if err := p.s.Err(); err != nil {
+		return nil, err
 	}
 
-	// found (,)
-	switch data[start] {
-	case '(', ')':
-		return start + 1, data[start : start+1], nil
-	}
+	return cur, nil
+}
 
-	// found non-ws, non-(), must be a token
-	for i := start; i < len(data); i++ {
-		switch data[i] {
-		// token finished
-		case ' ', '\n':
-			return i + 1, data[start:i], nil
-			// found (,) - we need to rescan it
-		case '(', ')':
-			return i, data[start:i], nil
-		}
+func output(cur *compoundExpr, depth int) {
+	for _, comp := range cur.compound {
+		output(comp, depth+1)
 	}
-	if atEOF && len(data) > start {
-		return len(data), data[start:], nil
+	for i := 0; i < depth; i++ {
+		print(" ")
 	}
-	return start, nil, nil
+	print(cur.compoundOP)
+	print(" ")
+
+	for _, s := range cur.simple {
+		print(s)
+		print(" ")
+	}
+	println()
 }
 
 func main() {
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Split(spdxSplit)
-	for scanner.Scan() {
-		fmt.Printf("%q\n", scanner.Text())
+	parser := NewParser(os.Stdin)
+	res, err := parser.Parse()
+	if err != nil {
+		log.Fatalf("cannot parse: %s", err)
 	}
-	if err := scanner.Err(); err != nil {
-		log.Fatalf("Invalid input: %s", err)
-	}
+	output(res, 0)
 }
