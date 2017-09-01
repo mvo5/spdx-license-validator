@@ -6,14 +6,18 @@ import (
 	"strings"
 )
 
-type Token string
+type Operator string
 
 const (
-	UNSET Token = ""
-	AND         = "AND"
-	OR          = "OR"
-	WITH        = "WITH"
+	UNSET Operator = ""
+	AND            = "AND"
+	OR             = "OR"
+	WITH           = "WITH"
 )
+
+func isOperator(tok string) bool {
+	return tok == AND || tok == OR || tok == WITH
+}
 
 type LicenseID string
 
@@ -41,17 +45,10 @@ func NewLicenseExceptionID(s string) (LicenseExceptionID, error) {
 	return "", fmt.Errorf("unknown license exception: %s", s)
 }
 
-type CompoundExpr struct {
-	Compound   []*CompoundExpr
-	CompoundOP Token
-
-	Simple    []LicenseID
-	Exception LicenseExceptionID
-}
-
 type Parser struct {
 	s *Scanner
 
+	// state
 	last string
 }
 
@@ -59,73 +56,67 @@ func NewParser(r io.Reader) *Parser {
 	return &Parser{s: NewScanner(r)}
 }
 
-func (p *Parser) Parse() (*CompoundExpr, error) {
-	return p.parse(0)
+func (p *Parser) Validate() error {
+	return p.validate(0)
 }
 
-func (p *Parser) parse(depth int) (*CompoundExpr, error) {
-	// TODO: implement precedence of a <license-expression>:
-	//    +
-	//    WITH
-	//    AND
-	//    OR
-	cur := &CompoundExpr{}
+func (p *Parser) advance(id string) error {
+	if p.s.Text() != id {
+		return fmt.Errorf("expected %q got %q", id, p.s.Text())
+	}
+	return nil
+}
+
+func (p *Parser) validate(depth int) error {
 	for p.s.Scan() {
 		tok := p.s.Text()
-		if p.last == WITH {
-			ex, err := NewLicenseExceptionID(tok)
-			if err != nil {
-				return nil, err
-			}
-			cur.Exception = ex
-			p.last = string(ex)
-			continue
-		}
 
-		switch tok {
-		case "(":
-			new, err := p.parse(depth + 1)
-			if err != nil {
-				return cur, err
+		switch {
+		case tok == "(":
+			if err := p.validate(depth + 1); err != nil {
+				return err
 			}
-			cur.Compound = append(cur.Compound, new)
-		case ")":
+			if p.s.Text() != ")" {
+				return fmt.Errorf(`expected closing parenthesis got %q`, p.s.Text())
+			}
+		case tok == ")":
 			if depth == 0 {
-				return nil, fmt.Errorf("unbalanced parenthesis")
+				return fmt.Errorf("unbalanced parenthesis")
 			}
-			if len(cur.Simple) > 1 && cur.CompoundOP == UNSET {
-				return nil, fmt.Errorf("need operator in %v", cur.Simple)
+			return nil
+		case isOperator(tok):
+			if p.last == "" {
+				return fmt.Errorf("expected left license with operator %s", tok)
+			}
+			if p.last == AND || p.last == OR {
+				return fmt.Errorf("expected license-id, got %q", tok)
+			}
+			if p.last == WITH {
+				return fmt.Errorf("expected license-exception-id, got %q", tok)
+			}
+		default:
+			switch {
+			case p.last == WITH:
+				if _, err := NewLicenseExceptionID(tok); err != nil {
+					return err
+				}
+			case p.last == "", p.last == AND, p.last == OR:
+				if _, err := NewLicenseID(tok); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("unexpected token: %q", tok)
 			}
 
-			return cur, nil
-		case AND:
-			if cur.CompoundOP != UNSET && cur.CompoundOP != AND {
-				return nil, fmt.Errorf("inconsistent operator in %v, was %v before, changes to %v", cur, cur.CompoundOP, "AND")
-			}
-			cur.CompoundOP = AND
-		case OR:
-			if cur.CompoundOP != UNSET && cur.CompoundOP != OR {
-				return nil, fmt.Errorf("inconsistent operator in %v, was %v before, changes to %v", cur, cur.CompoundOP, "OR")
-			}
-			cur.CompoundOP = OR
-		case WITH:
-			cur.Exception = WITH
-		default:
-			id, err := NewLicenseID(tok)
-			if err != nil {
-				return nil, err
-			}
-			cur.Simple = append(cur.Simple, id)
 		}
 		p.last = tok
 	}
 	if err := p.s.Err(); err != nil {
-		return nil, err
+		return err
+	}
+	if isOperator(p.last) {
+		return fmt.Errorf("expected right license with operator %s", p.last)
 	}
 
-	if len(cur.Simple) > 1 && cur.CompoundOP == UNSET {
-		return nil, fmt.Errorf("need operator in %v", cur.Simple)
-	}
-
-	return cur, nil
+	return nil
 }

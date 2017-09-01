@@ -16,72 +16,20 @@ type spdxSuite struct{}
 var _ = Suite(&spdxSuite{})
 
 func (s *spdxSuite) TestParseHappy(c *C) {
-	for _, t := range []struct {
-		inp string
-		res *spdx.CompoundExpr
-	}{
-		{
-			"GPL-2.0",
-			&spdx.CompoundExpr{
-				Simple: []spdx.LicenseID{"GPL-2.0"},
-			},
-		},
-		{
-			"GPL-2.0+",
-			&spdx.CompoundExpr{
-				Simple: []spdx.LicenseID{"GPL-2.0+"},
-			},
-		},
-		{
-			"GPL-2.0 AND BSD-2-Clause",
-			&spdx.CompoundExpr{
-				Simple:     []spdx.LicenseID{"GPL-2.0", "BSD-2-Clause"},
-				CompoundOP: spdx.AND,
-			},
-		},
-		{
-			"GPL-2.0 OR BSD-2-Clause",
-			&spdx.CompoundExpr{
-				Simple:     []spdx.LicenseID{"GPL-2.0", "BSD-2-Clause"},
-				CompoundOP: spdx.OR,
-			},
-		},
-		{
-			"GPL-2.0 WITH GCC-exception-3.1",
-			&spdx.CompoundExpr{
-				Simple:    []spdx.LicenseID{"GPL-2.0"},
-				Exception: "GCC-exception-3.1",
-			},
-		},
-		{
-			"(GPL-2.0 AND BSD-2-Clause)",
-			&spdx.CompoundExpr{
-				Compound: []*spdx.CompoundExpr{
-					{
-						Simple:     []spdx.LicenseID{"GPL-2.0", "BSD-2-Clause"},
-						CompoundOP: spdx.AND,
-					},
-				},
-			},
-		},
-		{
-			"GPL-2.0 AND (BSD-2-Clause OR 0BSD)",
-			&spdx.CompoundExpr{
-				Simple:     []spdx.LicenseID{"GPL-2.0"},
-				CompoundOP: spdx.AND,
-				Compound: []*spdx.CompoundExpr{
-					{
-						Simple:     []spdx.LicenseID{"BSD-2-Clause", "0BSD"},
-						CompoundOP: spdx.OR,
-					},
-				},
-			},
-		},
+	for _, t := range []string{
+		"GPL-2.0",
+		"GPL-2.0+",
+		"GPL-2.0 AND BSD-2-Clause",
+		"GPL-2.0 OR BSD-2-Clause",
+		"GPL-2.0 WITH GCC-exception-3.1",
+		"(GPL-2.0 AND BSD-2-Clause)",
+		"GPL-2.0 AND (BSD-2-Clause OR 0BSD)",
+		"GPL-2.0 AND (BSD-2-Clause OR 0BSD) WITH GCC-exception-3.1",
+		"((GPL-2.0 AND (BSD-2-Clause OR 0BSD)) OR GPL-3.0) ",
 	} {
-		parser := spdx.NewParser(bytes.NewBufferString(t.inp))
-		res, err := parser.Parse()
-		c.Assert(err, IsNil)
-		c.Check(res, DeepEquals, t.res)
+		parser := spdx.NewParser(bytes.NewBufferString(t))
+		err := parser.Validate()
+		c.Check(err, IsNil, Commentf("input: %q", t))
 	}
 }
 
@@ -90,14 +38,18 @@ func (s *spdxSuite) TestParseError(c *C) {
 		inp    string
 		errStr string
 	}{
-		{"FOO", "unknown license: FOO"},
+		{"FOO", `unknown license: FOO`},
+		{"GPL-2.0 GPL-3.0", `unexpected token: "GPL-3.0"`},
 		{"(GPL-2.0))", "unbalanced parenthesis"},
-		{"GPL-2.0 AND 0BSD OR GPL-3.0", "inconsistent operator .* was AND before, changes to OR"},
+		{"(GPL-2.0", `expected closing parenthesis got ""`},
+		{"OR", "expected left license with operator OR"},
+		{"OR GPL-2.0", "expected left license with operator OR"},
+		{"GPL-2.0 OR", "expected right license with operator OR"},
 		{"GPL-2.0 WITH BAR", "unknown license exception: BAR"},
-		{"GPL-2.0 WITH (foo)", `unknown license exception: \(`},
+		{"GPL-2.0 WITH (foo)", `unknown license exception: foo`},
 	} {
 		parser := spdx.NewParser(bytes.NewBufferString(t.inp))
-		_, err := parser.Parse()
-		c.Assert(err, ErrorMatches, t.errStr)
+		err := parser.Validate()
+		c.Check(err, ErrorMatches, t.errStr, Commentf("input: %q", t.inp))
 	}
 }
